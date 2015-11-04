@@ -424,6 +424,7 @@ type stream struct {
 	state         streamState
 	sentReset     bool // only true once detached from streams map
 	gotReset      bool // only true once detacted from streams map
+	hijacked      bool // flag for hijack
 }
 
 func (sc *serverConn) Framer() *Framer  { return sc.framer }
@@ -1443,8 +1444,10 @@ func (sc *serverConn) resetPendingRequest() {
 func (sc *serverConn) newWriterAndRequest() (*responseWriter, *http.Request, error) {
 	sc.serveG.check()
 	rp := &sc.req
-	if rp.invalidHeader || rp.method == "" || rp.path == "" ||
-		(rp.scheme != "https" && rp.scheme != "http") {
+	if rp.invalidHeader ||
+		(rp.method == "CONNECT" && rp.scheme != "" && rp.path != "") ||
+		(rp.method == "" || rp.path == "" ||
+			(rp.scheme != "https" && rp.scheme != "http")) {
 		// See 8.1.2.6 Malformed Requests and Responses:
 		//
 		// Malformed requests or responses that are detected
@@ -1455,6 +1458,12 @@ func (sc *serverConn) newWriterAndRequest() (*responseWriter, *http.Request, err
 		// "All HTTP/2 requests MUST include exactly one valid
 		// value for the :method, :scheme, and :path
 		// pseudo-header fields"
+		//
+		// 8.3 The CONNECT Method
+		// The :scheme and :path pseudo-header fields MUST be omitted
+		// The :authority pseudo-header field contains the host and port to
+		// connect to (equivalent to the authority-form of the request-target
+		// of CONNECT requests (see [RFC7230], Section 5.3))
 		return nil, nil, StreamError{rp.stream.id, ErrCodeProtocol}
 	}
 	var tlsState *tls.ConnectionState // nil if not scheme https
@@ -1480,14 +1489,22 @@ func (sc *serverConn) newWriterAndRequest() (*responseWriter, *http.Request, err
 		needsContinue: needsContinue,
 	}
 	// TODO: handle asterisk '*' requests + test
-	url, err := url.ParseRequestURI(rp.path)
+	var uri *url.URL
+	var err error
+	if rp.method == "CONNECT" {
+		uri = &url.URL{
+			Host: rp.path,
+		}
+	} else {
+		uri, err = url.Parse(rp.path)
+	}
 	if err != nil {
 		// TODO: find the right error code?
 		return nil, nil, StreamError{rp.stream.id, ErrCodeProtocol}
 	}
 	req := &http.Request{
 		Method:     rp.method,
-		URL:        url,
+		URL:        uri,
 		RemoteAddr: sc.remoteAddrStr,
 		Header:     rp.header,
 		RequestURI: rp.path,
@@ -1828,6 +1845,9 @@ func (w *responseWriter) WriteHeader(code int) {
 		panic("WriteHeader called after Handler finished")
 	}
 	rws.writeHeader(code)
+
+	/* flush header to client */
+	rws.writeChunk(nil)
 }
 
 func (rws *responseWriterState) writeHeader(code int) {
@@ -1859,10 +1879,16 @@ func cloneHeader(h http.Header) http.Header {
 // * -> responseWriterState.writeChunk(p []byte)
 // * -> responseWriterState.writeChunk (most of the magic; see comment there)
 func (w *responseWriter) Write(p []byte) (n int, err error) {
+	if w.rws.stream.hijacked {
+		return 0, errors.New("call ResponseWriter.Write after hijack")
+	}
 	return w.write(len(p), p, "")
 }
 
 func (w *responseWriter) WriteString(s string) (n int, err error) {
+	if w.rws.stream.hijacked {
+		return 0, errors.New("call responseWriter.WriteString after hijack")
+	}
 	return w.write(len(s), nil, s)
 }
 
@@ -1883,6 +1909,9 @@ func (w *responseWriter) write(lenData int, dataB []byte, dataS string) (n int, 
 }
 
 func (w *responseWriter) handlerDone() {
+	if w.rws.stream.hijacked {
+		return
+	}
 	rws := w.rws
 	if rws == nil {
 		panic("handlerDone called twice")

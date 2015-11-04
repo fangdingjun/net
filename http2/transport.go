@@ -17,6 +17,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +63,8 @@ type Transport struct {
 	// (e.g. share conn for googleapis.com and appspot.com)
 	connMu sync.Mutex
 	conns  map[string][]*clientConn // key is host:port
+
+	Proxy func(*http.Request) (*url.URL, error)
 }
 
 // clientConn is the state of a single HTTP/2 client connection to an
@@ -140,14 +143,28 @@ func (sew stickyErrWriter) Write(p []byte) (n int, err error) {
 }
 
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Scheme != "https" {
+	if t.Proxy == nil && req.URL.Scheme != "https" {
 		return nil, errors.New("http2: unsupported scheme")
 	}
 
-	host, port, err := net.SplitHostPort(req.URL.Host)
-	if err != nil {
-		host = req.URL.Host
-		port = "443"
+	var host, port string
+	var err error
+	if t.Proxy == nil {
+		host, port, err = net.SplitHostPort(req.URL.Host)
+		if err != nil {
+			host = req.URL.Host
+			port = "443"
+		}
+	} else {
+		u, err := t.Proxy(req)
+		if err != nil {
+			return nil, err
+		}
+		host, port, err = net.SplitHostPort(u.Host)
+		if err != nil {
+			host = u.Host
+			port = "443"
+		}
 	}
 
 	for {
@@ -644,10 +661,22 @@ func (cc *clientConn) encodeHeaders(req *http.Request) []byte {
 	// target URI (the path-absolute production and optionally a '?' character
 	// followed by the query production (see Sections 3.3 and 3.4 of
 	// [RFC3986]).
-	cc.writeHeader(":authority", host) // probably not right for all sites
+	//
+	// 8.3 The CONNECT Method
+	// The :scheme and :path pseudo-header fields MUST be omitted
+	// The :authority pseudo-header field contains the host and port to
+	// connect to (equivalent to the authority-form of the request-target
+	// of CONNECT requests (see [RFC7230], Section 5.3))
 	cc.writeHeader(":method", req.Method)
-	cc.writeHeader(":path", req.URL.RequestURI())
-	cc.writeHeader(":scheme", "https")
+	if req.Method == "CONNECT" {
+		cc.writeHeader(":authority", req.RequestURI)
+		cc.writeHeader(":path", "")
+		cc.writeHeader(":scheme", "")
+	} else {
+		cc.writeHeader(":authority", host) // probably not right for all sites
+		cc.writeHeader(":path", req.RequestURI)
+		cc.writeHeader(":scheme", req.URL.Scheme)
+	}
 
 	for k, vv := range req.Header {
 		lowKey := strings.ToLower(k)
