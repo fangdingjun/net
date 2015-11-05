@@ -1445,9 +1445,9 @@ func (sc *serverConn) newWriterAndRequest() (*responseWriter, *http.Request, err
 	sc.serveG.check()
 	rp := &sc.req
 	if rp.invalidHeader ||
-		(rp.method == "CONNECT" && rp.scheme != "" && rp.path != "") ||
-		(rp.method == "" || rp.path == "" ||
-			(rp.scheme != "https" && rp.scheme != "http")) {
+		(rp.method == "CONNECT" && (rp.scheme != "" || rp.path != "")) ||
+		(rp.method != "CONNECT" && (rp.method == "" || rp.path == "" ||
+			(rp.scheme != "https" && rp.scheme != "http"))) {
 		// See 8.1.2.6 Malformed Requests and Responses:
 		//
 		// Malformed requests or responses that are detected
@@ -1493,7 +1493,7 @@ func (sc *serverConn) newWriterAndRequest() (*responseWriter, *http.Request, err
 	var err error
 	if rp.method == "CONNECT" {
 		uri = &url.URL{
-			Host: rp.path,
+			Host: rp.authority,
 		}
 	} else {
 		uri, err = url.Parse(rp.path)
@@ -1909,13 +1909,11 @@ func (w *responseWriter) write(lenData int, dataB []byte, dataS string) (n int, 
 }
 
 func (w *responseWriter) handlerDone() {
-	if w.rws.stream.hijacked {
+	if w.rws == nil || w.rws.stream.hijacked {
 		return
 	}
+
 	rws := w.rws
-	if rws == nil {
-		panic("handlerDone called twice")
-	}
 	rws.handlerDone = true
 	w.Flush()
 	w.rws = nil

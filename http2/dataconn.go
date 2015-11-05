@@ -2,6 +2,7 @@ package http2
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -32,10 +33,16 @@ var _ net.Conn = &ServerDataConn{}
 var _ http.Hijacker = &responseWriter{}
 
 func (sdc *ServerDataConn) Read(b []byte) (int, error) {
+	if sdc.rwr.rws == nil || sdc.rwr.rws.stream.gotReset {
+		return 0, errors.New("stream closed")
+	}
 	return sdc.rwr.rws.body.Read(b)
 }
 
 func (sdc *ServerDataConn) Write(p []byte) (int, error) {
+	if sdc.rwr.rws == nil || sdc.rwr.rws.stream.sentReset {
+		return 0, errors.New("stream closed")
+	}
 	return sdc.rwr.rws.writeChunk(p)
 }
 
@@ -167,10 +174,22 @@ func (cc *clientConn) connect(req *http.Request) (*ClientDataConn, error) {
 }
 
 func (dc *ClientDataConn) Read(b []byte) (int, error) {
+	if dc.cs.resetErr != nil {
+		return 0, dc.cs.resetErr
+	}
+
+	if dc.cs.bufPipe.err != nil {
+		return 0, dc.cs.bufPipe.err
+	}
+
 	return dc.Res.Body.Read(b)
 }
 
 func (dc *ClientDataConn) Write(b []byte) (int, error) {
+	if dc.cs.resetErr != nil {
+		return 0, dc.cs.resetErr
+	}
+
 	cs := dc.cs
 	cc := dc.cc
 	endStream := false // whether we sent the final DATA frame w/ END_STREAM
