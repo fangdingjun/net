@@ -1060,6 +1060,14 @@ func (rl *clientConnReadLoop) processResetStream(f *RSTStreamFrame) error {
 		cs.resetErr = err
 		close(cs.peerReset)
 		cs.bufPipe.CloseWithError(err)
+		/*
+		   streamReset before header done
+		   notify the client
+		*/
+		select {
+		case cs.resc <- resAndError{err: err}:
+		default:
+		}
 	}
 	delete(rl.activeRes, cs.ID)
 	return nil

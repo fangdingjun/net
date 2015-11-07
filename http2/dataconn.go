@@ -109,6 +109,9 @@ func (t *Transport) Connect(req *http.Request) (*ClientDataConn, error) {
 	}
 
 	cc, err := t.getClientConn(host, port)
+	if err != nil {
+		return nil, err
+	}
 	return cc.connect(req)
 }
 
