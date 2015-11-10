@@ -181,32 +181,36 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // authorityAddr returns a given authority (a host/IP, or host:port / ip:port)
 // and returns a host:port. The port 443 is added if needed.
-func authorityAddr(authority string) (addr string) {
-	var host, port string
-	var err error
+func (t *Transport) authorityAddr(req *http.Request) (addr string) {
+	//var err error
+
+	h := req.URL.Host
+	if h == "" {
+		h = req.Host
+	}
 
 	/* no proxy */
 	if t.Proxy == nil {
-		host, port, err = net.SplitHostPort(authority)
-		if err != nil {
-			host = authority
-			port = "443"
+		if _, _, err := net.SplitHostPort(h); err != nil {
+			return net.JoinHostPort(h, "443")
 		}
-		return net.JoinHostPort(host, port)
+		return h
 	}
 
 	/* get proxy */
 	u, err := t.Proxy(req)
 	if err != nil {
-		return nil, err
-	}
-	host, port, err = net.SplitHostPort(u.Host)
-	if err != nil {
-		host = u.Host
-		port = "443"
+		if _, _, err := net.SplitHostPort(h); err != nil {
+			return net.JoinHostPort(h, "443")
+		}
+		return h
 	}
 
-	return net.JoinHostPort(host, port)
+	if _, _, err := net.SplitHostPort(u.Host); err != nil {
+		return net.JoinHostPort(u.Host, "443")
+	}
+
+	return u.Host
 }
 
 // RoundTripOpt is like RoundTrip, but takes options.
@@ -215,7 +219,7 @@ func (t *Transport) RoundTripOpt(req *http.Request, opt RoundTripOpt) (*http.Res
 		return nil, errors.New("http2: unsupported scheme")
 	}
 
-	addr := authorityAddr(req.URL.Host)
+	addr := t.authorityAddr(req)
 	for {
 		cc, err := t.connPool().GetClientConn(req, addr)
 		if err != nil {

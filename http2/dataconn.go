@@ -15,7 +15,7 @@ return this struct when call Transport.Connect method
 */
 type ClientDataConn struct {
 	cs  *clientStream
-	cc  *clientConn
+	cc  *ClientConn
 	Res *http.Response
 }
 
@@ -86,36 +86,18 @@ func (sdc *ServerDataConn) SetWriteDeadline(time.Time) error {
 
 */
 func (t *Transport) Connect(req *http.Request) (*ClientDataConn, error) {
-	var host, port string
+	//var host, port string
 	var err error
 
-	if t.Proxy == nil {
-		host, port, err = net.SplitHostPort(req.URL.Host)
-		if err != nil {
-			host = req.URL.Host
-			port = "443"
-		}
-	} else {
-		/* proxy */
-		u, err := t.Proxy(req)
-		if err != nil {
-			return nil, err
-		}
-		host, port, err = net.SplitHostPort(u.Host)
-		if err != nil {
-			host = u.Host
-			port = "443"
-		}
-	}
-
-	cc, err := t.getClientConn(host, port)
+	addr := t.authorityAddr(req)
+	cc, err := t.connPool().GetClientConn(req, addr)
 	if err != nil {
 		return nil, err
 	}
 	return cc.connect(req)
 }
 
-func (cc *clientConn) connect(req *http.Request) (*ClientDataConn, error) {
+func (cc *ClientConn) connect(req *http.Request) (*ClientDataConn, error) {
 	cc.mu.Lock()
 
 	if cc.closed {
