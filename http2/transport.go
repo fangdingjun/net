@@ -649,7 +649,7 @@ func (cc *ClientConn) encodeHeaders(req *http.Request) []byte {
 		cc.writeHeader(":scheme", "")
 	} else {
 		cc.writeHeader(":authority", host) // probably not right for all sites
-		cc.writeHeader(":path", req.RequestURI)
+		cc.writeHeader(":path", req.URL.RequestURI())
 		cc.writeHeader(":scheme", req.URL.Scheme)
 	}
 
