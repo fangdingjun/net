@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -142,9 +143,19 @@ func (cc *ClientConn) connect(req *http.Request) (*ClientDataConn, error) {
 		return nil, werr
 	}
 
-	re := <-cs.resc
-	if re.err != nil {
-		return nil, re.err
+	var re resAndError
+
+	select {
+	case re = <-cs.resc:
+		if re.err != nil {
+			return nil, re.err
+		}
+	case <-time.After(3 * time.Second):
+		// request time out
+		// close the connection
+		cc.tconn.Close()
+		log.Print("cc.connect: request timed out, may be connection hang")
+		return nil, errors.New("request time out")
 	}
 
 	res := re.res

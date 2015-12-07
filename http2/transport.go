@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/http2/hpack"
 )
@@ -526,6 +527,13 @@ func (cc *ClientConn) RoundTrip(req *http.Request) (*http.Response, error) {
 			if err != nil {
 				return nil, err
 			}
+		case <-time.After(3 * time.Second):
+			// request time out
+			// close the connection
+			// the request will retry with a new connection
+			cc.tconn.Close()
+			log.Print("cc.RoundTrip: request timed out, may be connection hang")
+			return nil, errClientConnUnusable
 		}
 	}
 }
